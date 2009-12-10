@@ -87,9 +87,23 @@ unsigned char fontGetAsciiChar(char letter)
 }
 
 
-// Video buffer 80x7
+#define SINGLE_BUFFER 0
+#define DOUBLE_BUFFER 1
+
+char displayMode;   // Either SINGLE_BUFFER or DOUBLE_BUFFER
+
+#define ROWS 7      // Note that there is a set of rows for each color, so 14 in total
+#define COLS 10
+
+// Double 80x7 bi-color video buffer
 // green is arrays 0-6, red is 7-13
-unsigned char videoBuffer[14][10];
+// Not a 2d array because we couldn't point to it.
+unsigned char videoBuffer[2][ROWS*2 * COLS];
+
+// Display buffer is the one we are displaying.  Working buffer is the one we are assembling.
+unsigned char* displayBuffer;
+unsigned char* workBuffer;
+
 
 // 7 pins that turn on the rows
 unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
@@ -98,7 +112,6 @@ unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
 unsigned char testPatternB[] = {0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6,
                                 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d,
                                 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d};
-
 
 #define DATAOUT 11      //MOSI
 #define DATAIN 12       //MISO - not used, but part of builtin SPI
@@ -114,13 +127,107 @@ char spi_transfer(volatile char data)
 }
 
 
+// Flip the front and back buffers
+void flipVideoBuffer()
+{
+  // Only do something if we are in double-buffer mode
+  if (displayMode == DOUBLE_BUFFER)
+  {
+    unsigned char* temp = displayBuffer;
+    displayBuffer = workBuffer;
+    workBuffer = temp;
+  }
+}
+
+// Clear the video buffer
+// if we are in double-buffer mode, clear the back buffer, otherwise clear the front
+void clearVideoBuffer()
+{
+  for (int i = 0; i < 14; i++) {
+    for (int j = 0; j < 10; j++) {
+      workBuffer[i*COLS + j] = 0;
+    }
+  }
+}
+
+
+
+
+// TODO: Make this interrupt-based!
+void drawVideoBuffer()
+{
+  // For each row
+  for (int row = 0; row < 7; row++) {
+    // for each column
+    for (int col = 0; col < 10; col++) {
+      // Green
+      spi_transfer(displayBuffer[row*COLS + 9-col]);
+      
+      // Then red
+      spi_transfer(displayBuffer[(row+7)*COLS + 9-col]);
+    }
+    
+    digitalWrite(rowPins[row], HIGH);
+    delayMicroseconds(500);
+    digitalWrite(rowPins[row], LOW);    
+  }
+}
+
+
+// Set up the video buffering mode
+// @mode    either SINGLE_BUFFER or DOUBLE_BUFFER
+void setupVideoBuffer(int mode)
+{
+  if (mode == DOUBLE_BUFFER) {
+    displayMode = DOUBLE_BUFFER;
+  }
+  else {
+    displayMode = SINGLE_BUFFER;
+  }
+  
+  byte clr;
+  pinMode(DATAOUT, OUTPUT);
+  pinMode(DATAIN, INPUT);
+  pinMode(SPICLOCK,OUTPUT);
+  
+  pinMode(10, OUTPUT);
+  digitalWrite(10, LOW);
+  
+  // SPCR = 01010000
+  //interrupt disabled,spi enabled,msb 1st,master,clk low when idle,
+  //sample on leading edge of clk,system clock/4 (fastest)
+  SPCR = (1<<SPE)|(1<<MSTR);
+  clr=SPSR;
+  clr=SPDR;
+  delay(10);
+  
+  // Setup row select lines
+  for (int i = 0; i < sizeof(rowPins); i++) {
+    pinMode(rowPins[i], OUTPUT);
+    digitalWrite(rowPins[i], LOW);
+  }
+
+  displayBuffer = videoBuffer[0];
+  if (displayMode == SINGLE_BUFFER) {
+    workBuffer = displayBuffer;
+  }
+  else {
+    workBuffer = videoBuffer[1];
+  }
+  
+  // Clear the front buffer
+  clearVideoBuffer();
+  flipVideoBuffer();
+}
+
+
 //  Draw a letter at any point in the display buffer
 //  letter  in ASCII
 //  offset  in leds from the origin
 //  color   String color (0 = green, 1 = red, 2 = yellow)
 void drawChar(char letter, unsigned char offset, unsigned char color)
-{
-  // First, convert the ASCII letter to a font offset
+{  
+  // Convert the ASCII letter to a font offset
   // (kludge for current font)
   unsigned char fontOffset = fontGetAsciiChar(letter);
   if (fontOffset == 255) { return; }
@@ -138,10 +245,10 @@ void drawChar(char letter, unsigned char offset, unsigned char color)
     
     for (int col = 0; col < 5; col++) {
       if( color & 0x1) {
-        videoBuffer[row][alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+        workBuffer[row*COLS + alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
       }
       if( color & 0x2) {
-        videoBuffer[row + 7][alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+        workBuffer[(row + 7)*COLS + alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
       }
       
       // Advance to the next offset
@@ -172,70 +279,10 @@ void drawString(char* string, char length, int offset, unsigned char color)
 } 
 
 
-// Clear the video buffer
-void clearVideoBuffer()
-{
-  for (int i = 0; i < 14; i++) {
-    for (int j = 0; j < 10; j++) {
-      videoBuffer[i][j] = 0;
-    }
-  }
-}
-
-
-// TODO: Make this interrupt-based!
-void drawVideoBuffer()
-{
-  // For each row
-  for (int row = 0; row < 7; row++) {
-    // for each column
-    for (int col = 0; col < 10; col++) {
-      // Green
-      spi_transfer(videoBuffer[row][9-col]);
-      
-      // Then red
-      spi_transfer(videoBuffer[row+7][9-col]);
-    }
-    
-    digitalWrite(rowPins[row], HIGH);
-    delayMicroseconds(500);
-    digitalWrite(rowPins[row], LOW);    
-  }
-}
-
-
-void setupVideoBuffer()
-{
-  byte clr;
-  pinMode(DATAOUT, OUTPUT);
-  pinMode(DATAIN, INPUT);
-  pinMode(SPICLOCK,OUTPUT);
-  
-  pinMode(10, OUTPUT);
-  digitalWrite(10, LOW);
-  
-  // SPCR = 01010000
-  //interrupt disabled,spi enabled,msb 1st,master,clk low when idle,
-  //sample on leading edge of clk,system clock/4 (fastest)
-  SPCR = (1<<SPE)|(1<<MSTR);
-  clr=SPSR;
-  clr=SPDR;
-  delay(10);
-  
-  // Setup row select lines
-  for (int i = 0; i < sizeof(rowPins); i++) {
-    pinMode(rowPins[i], OUTPUT);
-    digitalWrite(rowPins[i], LOW);
-  }
-
-  clearVideoBuffer();
-}
-
-
 // Initialize the IO ports
 void setup()
 {
-  setupVideoBuffer();
+  setupVideoBuffer(DOUBLE_BUFFER);
   
   Serial.begin(9600);
 }
@@ -248,6 +295,8 @@ void loop()
     clearVideoBuffer();
     drawString("HackPGH", 7, 0+i, 0);
     drawString("FTW", 3, 48+i, 2);
+    
+    flipVideoBuffer();
     for (int j = 0; j < 25; j++) {
       drawVideoBuffer();
     }
@@ -257,6 +306,8 @@ void loop()
     clearVideoBuffer();
     drawString("HackPGH", 7, 0+i, 1);
     drawString("FTW", 3, 48+i, 2);
+    
+    flipVideoBuffer();
     for (int j = 0; j < 25; j++) {
       drawVideoBuffer();
     }
