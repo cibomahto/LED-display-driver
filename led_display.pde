@@ -14,10 +14,13 @@
 // 5x7 character font from:
 // http://heim.ifi.uio.no/haakoh/avr/font.h
 
+#define FONT_BAD_CHARACTER 255
+
 // 0-25: letters
 // 26-36: numbers, style A
 // 37-47: numbers, style B
 const int fontCount = 46;
+const int fontWidth = 5;
 const unsigned char font[46][5] = {
   {0x3f, 0x48, 0x48, 0x48, 0x3f},
   {0x7f, 0x49, 0x49, 0x49, 0x36},
@@ -86,7 +89,7 @@ unsigned char fontGetAsciiChar(char letter)
   }
   else {
     // we don't have a character for that, sorry!
-    return 255;
+    return FONT_BAD_CHARACTER;
   }
 }
 
@@ -101,7 +104,7 @@ char displayMode;   // Either SINGLE_BUFFER or DOUBLE_BUFFER
 
 // Double 80x7 bi-color video buffer
 // green is arrays 0-6, red is 7-13
-// Not a 2d array because we couldn't point to it.
+// Not a 2d array because then we couldn't point to it.
 unsigned char videoBuffer[2][ROWS*2 * COLS];
 
 // Display buffer is the one we are displaying.  Working buffer is the one we are assembling.
@@ -119,16 +122,7 @@ unsigned char testPatternB[] = {0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 
 
 #define DATAOUT 11      //MOSI
 #define DATAIN 12       //MISO - not used, but part of builtin SPI
-#define SPICLOCK  13    //sck
-
-
-char spi_transfer(volatile char data)
-{
-  SPDR = data;                    // Start the transmission
-  while (!(SPSR & (1<<SPIF))) {}  // Wait the end of the transmission
-                                  // TODO: interrupt-based display
-  return SPDR;                    // return the received byte
-}
+#define SPICLOCK  13    //SCK
 
 
 int videoCurrentRow;
@@ -162,7 +156,6 @@ ISR(SPI_STC_vect)
     TCCR2B = (1<<CS22)|(0<<CS21)|(0<<CS20);
   }
 }
-
 
 // This function is called when timer2 overflows
 ISR(TIMER2_OVF_vect)
@@ -201,14 +194,17 @@ ISR(TIMER2_OVF_vect)
 // @blocking    If true, wait until page has flipped before returning.
 void flipVideoBuffer(bool blocking = true)
 {
-  // Just set the flip flag, the buffer will flip between redraws
-  videoFlipPage = true;
+  if (displayMode == DOUBLE_BUFFER) {
+    // Just set the flip flag, the buffer will flip between redraws
+    videoFlipPage = true;
   
-  // If we are blocking, sit here until the page flips.
-  if (blocking) {
-    delay(1);
+    // If we are blocking, sit here until the page flips.
+    while (blocking && videoFlipPage) {
+      delay(1);
+    }
   }
 }
+
 
 // Clear the video buffer
 // if we are in double-buffer mode, clear the back buffer, otherwise clear the front
@@ -218,27 +214,6 @@ void clearVideoBuffer()
     for (int j = 0; j < 10; j++) {
       workBuffer[i*COLS + j] = 0;
     }
-  }
-}
-
-
-// TODO: Make this interrupt-based!
-void drawVideoBuffer()
-{
-  // For each row
-  for (int row = 0; row < 7; row++) {
-    // for each column
-    for (int col = 0; col < 10; col++) {
-      // Green
-      spi_transfer(displayBuffer[row*COLS + 9-col]);
-      
-      // Then red
-      spi_transfer(displayBuffer[(row+7)*COLS + 9-col]);
-    }
-    
-    digitalWrite(rowPins[row], HIGH);
-    delayMicroseconds(500);
-    digitalWrite(rowPins[row], LOW);    
   }
 }
 
@@ -272,12 +247,10 @@ void setupVideoBuffer(int mode)
   clr=SPDR;
   delay(10);
   
-  // Set up Timer 2 (don't start it, though)
+  // Set up Timer 2 to generate interrupts on overflow (don't start it, though)
   TCCR2A = 0;
   TCCR2B = 0;
-//  TCCR2B = (1<<CS22)|(1<<CS21)|(1<<CS20);  
   TIMSK2 = (1<<TOIE2);
-  
   
   // Set up row select lines
   for (int i = 0; i < sizeof(rowPins); i++) {
@@ -301,64 +274,73 @@ void setupVideoBuffer(int mode)
   videoCurrentRow = 0;
   videoCurrentCol = 0;
   SPDR = 0x55;
-
 }
 
 
-//  Draw a letter at any point in the display buffer
-//  letter  in ASCII
-//  offset  in leds from the origin
-//  color   String color (0 = green, 1 = red, 2 = yellow)
-void drawChar(char letter, unsigned char offset, unsigned char color)
-{  
-  // Convert the ASCII letter to a font offset
-  // (kludge for current font)
-  unsigned char fontOffset = fontGetAsciiChar(letter);
-  if (fontOffset == 255) { return; }
+// Draw a letter at any point in the display buffer
+// @letter  in ASCII
+// @offset  in leds from the origin
+// @color   String color (0 = green, 1 = red, 2 = yellow)
+void drawChar(char letter, int offset, unsigned char color)
+{
+  // Don't bother trying to draw if we are off the screen
+  if (offset <= -fontWidth) {
+    return;
+  }
   
-  // Fix the color
+  // Convert the ASCII letter to a font offset
+  unsigned char fontOffset = fontGetAsciiChar(letter);
+  if (fontOffset == FONT_BAD_CHARACTER) { return; }
+  
+  // Re-map the color into a bitfield
   color += 1;
 
-  unsigned char alignedCol = 0;
-  unsigned char alignedOffset = 0;
+  int alignedCol = 0;
+  char alignedOffset = 0;
   
-  for (int row = 0; row < 7; row++) {
-    // Calculate which byte the character starts on, and the bit offset from that byte
-    alignedCol = offset/8;
-    alignedOffset = offset%8;
+  // Calculate which byte the character starts on, and the bit offset from that byte
+  alignedCol = offset/8;
+  alignedOffset = offset%8;
     
-    for (int col = 0; col < 5; col++) {
-      if( color & 0x1) {
-        workBuffer[row*COLS + alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+  for (int col = 0; col < fontWidth; col++) {
+    if (alignedCol >= 0 && alignedOffset >= 0 && alignedCol < COLS) {
+      if( color & 0x1) {          
+       for (int row = 0; row < 7; row++) {
+          workBuffer[row*COLS + alignedCol] |=
+                    ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+       }
       }
       if( color & 0x2) {
-        workBuffer[(row + 7)*COLS + alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+       for (int row = 0; row < 7; row++) {
+          workBuffer[(row + 7)*COLS + alignedCol] |=
+                    ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
+       }
       }
+    }
       
-      // Advance to the next offset
-      alignedOffset++;
+    // Advance to the next offset
+    alignedOffset++;
       
-      // If we walk out of the current column byte, advance to the next
-      if (alignedOffset > 7) {
-        alignedOffset = 0;
-        alignedCol++;
-      }
+    // If we walk out of the current column byte, advance to the next
+    if (alignedOffset > 7) {
+      alignedOffset = 0;
+      alignedCol++;
     }
   }
 }
 
 
 // Draw a string at any point into the buffer
-//
-//  string  C-style string
-//  length  length of said string
-//  offset  byte offset to display string
-//  color   String color (0 = green, 1 = red, 2 = yellow)
-void drawString(char* string, char length, int offset, unsigned char color)
+// @string  C-style string
+// @length  length of said string
+// @offset  byte offset to display string
+// @color   String color (0 = green, 1 = red, 2 = yellow)
+// @spacing Amount of space between characters
+void drawString(char* string, char length, int offset, unsigned char color, unsigned int spacing = 1)
 {
   for (int i = 0; i < length; i++) {
     drawChar(string[i], offset, color);
-    offset+=6;
+    offset += fontWidth + spacing;
   }
 } 
 
@@ -366,7 +348,7 @@ void drawString(char* string, char length, int offset, unsigned char color)
 // Initialize the IO ports
 void setup()
 {
-  setupVideoBuffer(SINGLE_BUFFER);
+  setupVideoBuffer(DOUBLE_BUFFER);
   
   Serial.begin(9600);
 }
@@ -374,22 +356,33 @@ void setup()
 
 // Main loop
 void loop()
-{  
-  for (int i = 0; i < 16; i++) {
+{
+  char testStr[] = "welcome to hackpgh   this is a test   1234567890 abcdefghijklmnopqrtuvwxyz";
+  for (int i = 80; i > -74*6; i--) {
+    clearVideoBuffer();
+    drawString(testStr, 74, i, 2);
+    flipVideoBuffer();
+    delay(120);
+  }
+  
+/*  
+  for (int i = -8; i < 24; i++) {
     clearVideoBuffer();
     drawString("HackPGH", 7, 0+i, 0);
     drawString("FTW", 3, 48+i, 2);
     
     flipVideoBuffer();
-    delay(20);
+    delay(150);
   }
 
-  for (int i = 14; i > 0; i--) {
+  for (int i = 22; i > -8; i--) {
     clearVideoBuffer();
     drawString("HackPGH", 7, 0+i, 1);
     drawString("FTW", 3, 48+i, 2);
     
     flipVideoBuffer();
-    delay(20);
+    delay(150);
   }
+*/
+
 }
