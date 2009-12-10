@@ -354,35 +354,66 @@ void setup()
 }
  
 
+char userString[100];
+char userStringLen = 0;
+
+
 // Main loop
 void loop()
 {
-  char testStr[] = "welcome to hackpgh   this is a test   1234567890 abcdefghijklmnopqrtuvwxyz";
-  for (int i = 80; i > -74*6; i--) {
-    clearVideoBuffer();
-    drawString(testStr, 74, i, 2);
-    flipVideoBuffer();
-    delay(120);
-  }
   
-/*  
-  for (int i = -8; i < 24; i++) {
+  // Static scroll demo
+  char testStr[] = "just look at this awesome led sign    just look at it";
+  for (int i = 80; i > -53*6; i--) {
     clearVideoBuffer();
-    drawString("HackPGH", 7, 0+i, 0);
-    drawString("FTW", 3, 48+i, 2);
-    
+    drawString(testStr, 53, i, 2);
     flipVideoBuffer();
-    delay(150);
+    delay(160);
   }
 
-  for (int i = 22; i > -8; i--) {
-    clearVideoBuffer();
-    drawString("HackPGH", 7, 0+i, 1);
-    drawString("FTW", 3, 48+i, 2);
+  
+  for (int j = 0; j < 2; j++) {
+    // Text bounce demo
+    for (int i = -8; i < 24; i++) {
+      clearVideoBuffer();
+      drawString("HackPGH", 7, 0+i, 0);
+      drawString("FTW", 3, 48+i, 2);
     
-    flipVideoBuffer();
-    delay(150);
+      flipVideoBuffer();
+      delay(120);
+    }
+
+    for (int i = 22; i > -8; i--) {
+      clearVideoBuffer();
+      drawString("HackPGH", 7, 0+i, 1);
+      drawString("FTW", 3, 48+i, 2);
+    
+      flipVideoBuffer();
+      delay(120);
+    }
   }
-*/
+
+  while (1) {
+    // Serial input demo
+    if(Serial.available() > 0) {
+      if (userStringLen > 12) {
+        for (int i = 0; i < 12; i++) {
+         userString[i] = userString[i+1];
+        } 
+    
+        userStringLen -= 1;
+      }
+    
+      // read the incoming byte:
+      userString[userStringLen] = Serial.read();
+    
+      userStringLen++;
+    
+      clearVideoBuffer();
+      drawString(userString, userStringLen, 0, 2);
+      flipVideoBuffer();
+    }
+  }
+
 
 }
