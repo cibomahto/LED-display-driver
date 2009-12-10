@@ -10,6 +10,10 @@
 
 
 // 5x7 character font from http://heim.ifi.uio.no/haakoh/avr/font.h
+// 0-25: letters
+// 26-36: numbers, style A
+// 37-47: numbers, style B
+
 const int fontCount = 46;
 const unsigned char font[46][5] = {
   {0x3f, 0x48, 0x48, 0x48, 0x3f},
@@ -88,11 +92,30 @@ char spi_transfer(volatile char data)
 }
 
 //  Draw a letter at any point in the display buffer
-//  letter  dunno!
+//  letter  in ASCII
 //  offset  in leds from the origin
-//  color   0 = green, 1 = red, 2 = yellow
-void drawChar(unsigned char letter, unsigned char offset, unsigned char color)
+//  color   String color (0 = green, 1 = red, 2 = yellow)
+void drawChar(char letter, unsigned char offset, unsigned char color)
 {
+  // First, convert the ASCII letter to the font
+  // (kludge for current font)
+  if (letter >= 65 && letter <= 90) {
+    letter -= 65;
+  }
+  else if (letter >= 97 && letter <= 122) {
+    letter -= 97;
+  }
+  else if (letter >= 48 && letter <= 57) {
+    letter = letter - 48 + 26;
+  }
+  else {
+    // we don't have a character for that, sorry!
+    return;
+  }
+  
+  // Fix the color
+  color += 1;
+
   unsigned char alignedCol = 0;
   unsigned char alignedOffset = 0;
   
@@ -121,7 +144,20 @@ void drawChar(unsigned char letter, unsigned char offset, unsigned char color)
   }
 }
 
-       
+// Draw a string at any point into the buffer
+//
+//  string  C-style string
+//  length  length of said string
+//  offset  byte offset to display string
+//  color   String color (0 = green, 1 = red, 2 = yellow)
+void drawString(char* string, char length, int offset, char color)
+{
+  for (int i = 0; i < length; i++) {
+    drawChar(string[i], offset, color);
+    offset+=6;
+  }
+} 
+
 // Initialize the IO ports
 void setup()
 {
@@ -149,17 +185,17 @@ void setup()
     digitalWrite(rowPins[i], LOW);
   }
 
-  // Clear the video buffer
+  clearVideoBuffer();
+}
+
+// Clear the video buffer
+void clearVideoBuffer()
+{
   for (int i = 0; i < 14; i++) {
     for (int j = 0; j < 10; j++) {
       videoBuffer[i][j] = 0;
     }
   }
-
-  for (int i = 0; i < 16; i++) {
-    drawChar(i, i*5, i%3 + 1);
-  }
-
 }
 
 // TODO: Make this interrupt-based!
@@ -180,11 +216,24 @@ void drawVideoBuffer()
     delayMicroseconds(500);
     digitalWrite(rowPins[row], LOW);    
   }
-  
 }
  
 // Main loop
 void loop()
 {
-  drawVideoBuffer();
+  for (int i = 0; i < 16; i++) {
+    clearVideoBuffer();
+    drawString("HackPGH FTW", 11, 0+i, 1);
+    for (int j = 0; j < 30; j++) {
+      drawVideoBuffer();
+    }
+  }
+
+  for (int i = 14; i > 0; i--) {
+    clearVideoBuffer();
+    drawString("HackPGH FTW", 11, 0+i, 1);
+    for (int j = 0; j < 30; j++) {
+      drawVideoBuffer();
+    }
+  }
 }
