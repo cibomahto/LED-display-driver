@@ -8,8 +8,12 @@
 // Hardware SPI hints from:
 // http://www.arduino.cc/en/Tutorial/SPIDigitalPot
 
+// Timer2 interrupt hints from:
+// http://www.uchobby.com/index.php/2007/11/24/arduino-interrupts/
 
-// 5x7 character font from http://heim.ifi.uio.no/haakoh/avr/font.h
+// 5x7 character font from:
+// http://heim.ifi.uio.no/haakoh/avr/font.h
+
 // 0-25: letters
 // 26-36: numbers, style A
 // 37-47: numbers, style B
@@ -127,15 +131,82 @@ char spi_transfer(volatile char data)
 }
 
 
-// Flip the front and back buffers
-void flipVideoBuffer()
+int videoCurrentRow;
+int videoCurrentCol;
+boolean videoFlipPage;
+
+// This function is called whenever the SPI is finished transferring a byte of data.
+ISR(SPI_STC_vect)
 {
-  // Only do something if we are in double-buffer mode
-  if (displayMode == DOUBLE_BUFFER)
-  {
-    unsigned char* temp = displayBuffer;
-    displayBuffer = workBuffer;
-    workBuffer = temp;
+  // Determine if there is more data to transfer in this row; otherwise, turn the row on
+  // and start a timer.
+  if (videoCurrentCol < COLS * 2) {
+    // Just transfer the next byte.  Note that we have to interleve green and red banks.
+    if (videoCurrentCol & 1) {  
+      SPDR = displayBuffer[(videoCurrentRow+7)*COLS + 9-(videoCurrentCol/2)];
+    }
+    else {
+      SPDR = displayBuffer[videoCurrentRow*COLS + 9-(videoCurrentCol/2)];
+    }
+    
+    videoCurrentCol += 1;
+  }
+  else {
+    // Turn on the row line, then start the timer.  The timer ISR is then expected to
+    // turn off the row and start the next column transmission.
+
+    // Turn on the row
+    digitalWrite(rowPins[videoCurrentRow], HIGH);
+    
+    // Start the timer
+    TCCR2B = (1<<CS22)|(0<<CS21)|(0<<CS20);
+  }
+}
+
+
+// This function is called when timer2 overflows
+ISR(TIMER2_OVF_vect)
+{
+  // Turn off the timer (disable it's clock source)
+  TCCR2B = 0;
+  
+  // Turn off the current row
+  digitalWrite(rowPins[videoCurrentRow], LOW);
+
+  // Advance the row count
+  videoCurrentRow++;
+  if (videoCurrentRow >= ROWS) {
+    videoCurrentRow = 0;
+    
+    // If the page should be flipped, do it here.
+    if (videoFlipPage && displayMode == DOUBLE_BUFFER)
+    {
+      videoFlipPage = false;
+      
+      unsigned char* temp = displayBuffer;
+      displayBuffer = workBuffer;
+      workBuffer = temp;
+    }
+  }
+
+  // Reset the column count
+  videoCurrentCol = 0;
+
+  // Drop out nothing to start the next column display loop
+  SPDR = 0;
+}
+
+
+// Flip the front and back buffers
+// @blocking    If true, wait until page has flipped before returning.
+void flipVideoBuffer(bool blocking = true)
+{
+  // Just set the flip flag, the buffer will flip between redraws
+  videoFlipPage = true;
+  
+  // If we are blocking, sit here until the page flips.
+  if (blocking) {
+    delay(1);
   }
 }
 
@@ -149,8 +220,6 @@ void clearVideoBuffer()
     }
   }
 }
-
-
 
 
 // TODO: Make this interrupt-based!
@@ -193,15 +262,24 @@ void setupVideoBuffer(int mode)
   pinMode(10, OUTPUT);
   digitalWrite(10, LOW);
   
-  // SPCR = 01010000
-  //interrupt disabled,spi enabled,msb 1st,master,clk low when idle,
+  // Set up SPI port
+  
+  // SPCR = 11010000
+  //interrupt enabled,spi enabled,msb 1st,master,clk low when idle,
   //sample on leading edge of clk,system clock/4 (fastest)
-  SPCR = (1<<SPE)|(1<<MSTR);
+  SPCR = (1<<SPIE)|(1<<SPE)|(1<<MSTR);
   clr=SPSR;
   clr=SPDR;
   delay(10);
   
-  // Setup row select lines
+  // Set up Timer 2 (don't start it, though)
+  TCCR2A = 0;
+  TCCR2B = 0;
+//  TCCR2B = (1<<CS22)|(1<<CS21)|(1<<CS20);  
+  TIMSK2 = (1<<TOIE2);
+  
+  
+  // Set up row select lines
   for (int i = 0; i < sizeof(rowPins); i++) {
     pinMode(rowPins[i], OUTPUT);
     digitalWrite(rowPins[i], LOW);
@@ -217,7 +295,13 @@ void setupVideoBuffer(int mode)
   
   // Clear the front buffer
   clearVideoBuffer();
-  flipVideoBuffer();
+  flipVideoBuffer(false);
+
+  // Jump start the display by writing to the SPI
+  videoCurrentRow = 0;
+  videoCurrentCol = 0;
+  SPDR = 0x55;
+
 }
 
 
@@ -282,7 +366,7 @@ void drawString(char* string, char length, int offset, unsigned char color)
 // Initialize the IO ports
 void setup()
 {
-  setupVideoBuffer(DOUBLE_BUFFER);
+  setupVideoBuffer(SINGLE_BUFFER);
   
   Serial.begin(9600);
 }
@@ -290,16 +374,14 @@ void setup()
 
 // Main loop
 void loop()
-{
+{  
   for (int i = 0; i < 16; i++) {
     clearVideoBuffer();
     drawString("HackPGH", 7, 0+i, 0);
     drawString("FTW", 3, 48+i, 2);
     
     flipVideoBuffer();
-    for (int j = 0; j < 25; j++) {
-      drawVideoBuffer();
-    }
+    delay(20);
   }
 
   for (int i = 14; i > 0; i--) {
@@ -308,8 +390,6 @@ void loop()
     drawString("FTW", 3, 48+i, 2);
     
     flipVideoBuffer();
-    for (int j = 0; j < 25; j++) {
-      drawVideoBuffer();
-    }
+    delay(20);
   }
 }
