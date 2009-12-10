@@ -10,7 +10,7 @@
 
 
 // 5x7 character font from http://heim.ifi.uio.no/haakoh/avr/font.h
-const int font_count = 46;
+const int fontCount = 46;
 const unsigned char font[46][5] = {
   {0x3f, 0x48, 0x48, 0x48, 0x3f},
   {0x7f, 0x49, 0x49, 0x49, 0x36},
@@ -87,6 +87,40 @@ char spi_transfer(volatile char data)
   return SPDR;                    // return the received byte
 }
 
+//  Draw a letter at any point in the display buffer
+//  letter  dunno!
+//  offset  in leds from the origin
+//  color   0 = green, 1 = red, 2 = yellow
+void drawChar(unsigned char letter, unsigned char offset, unsigned char color)
+{
+  unsigned char alignedCol = 0;
+  unsigned char alignedOffset = 0;
+  
+  for (int row = 0; row < 7; row++) {
+    // Calculate which byte the character starts on, and the bit offset from that byte
+    alignedCol = offset/8;
+    alignedOffset = offset%8;
+    
+    for (int col = 0; col < 5; col++) {
+      if( color & 0x1) {
+        videoBuffer[row][alignedCol] |= ((font[letter][col] >> row) & 0x1) << alignedOffset;
+      }
+      if( color & 0x2) {
+        videoBuffer[row + 7][alignedCol] |= ((font[letter][col] >> row) & 0x1) << alignedOffset;
+      }
+      
+      // Advance to the next offset
+      alignedOffset++;
+      
+      // If we walk out of the current column byte, advance to the next
+      if (alignedOffset > 7) {
+        alignedOffset = 0;
+        alignedCol++;
+      }
+    }
+  }
+}
+
        
 // Initialize the IO ports
 void setup()
@@ -115,45 +149,20 @@ void setup()
     digitalWrite(rowPins[i], LOW);
   }
 
-  // Put a message in the video buffer
+  // Clear the video buffer
   for (int i = 0; i < 14; i++) {
     for (int j = 0; j < 10; j++) {
       videoBuffer[i][j] = 0;
     }
   }
-  
-  videoBuffer[0][0] = 0xaa;
-  videoBuffer[1][1] = 0xaa;
-  videoBuffer[2][2] = 0xaa;
-  videoBuffer[3][3] = 0xaa;
-  videoBuffer[4][4] = 0xaa;
-  videoBuffer[5][5] = 0xaa;
-  videoBuffer[6][6] = 0xaa;
 
-  videoBuffer[7][0] = 0x66;
-  videoBuffer[8][1] = 0x66;
-  videoBuffer[9][2] = 0x66;
-  videoBuffer[10][3] = 0x66;
-  videoBuffer[11][4] = 0x66;
-  videoBuffer[12][5] = 0x66;
-  videoBuffer[13][6] = 0x66;
-}
-
-
-// Draw a full row onto the screen
-// Data should be in raw screen format: interleved bytes of green and red data.
-void drawRow(unsigned char* screenData, unsigned char row)
-{  
-  // Just dump each byte to the screen
-  for (int i= 0; i < 20; i++) {
-    spi_transfer(screenData[i]);
+  for (int i = 0; i < 16; i++) {
+    drawChar(i, i*5, i%3 + 1);
   }
-  
-  digitalWrite(rowPins[row], HIGH);
-  delayMicroseconds(500);
-  digitalWrite(rowPins[row], LOW);
+
 }
 
+// TODO: Make this interrupt-based!
 void drawVideoBuffer()
 {
   // For each row
@@ -161,10 +170,10 @@ void drawVideoBuffer()
     // for each column
     for (int col = 0; col < 10; col++) {
       // Green
-      spi_transfer(videoBuffer[row][col]);
+      spi_transfer(videoBuffer[row][9-col]);
       
       // Then red
-      spi_transfer(videoBuffer[row+7][col]);
+      spi_transfer(videoBuffer[row+7][9-col]);
     }
     
     digitalWrite(rowPins[row], HIGH);
