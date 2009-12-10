@@ -13,7 +13,6 @@
 // 0-25: letters
 // 26-36: numbers, style A
 // 37-47: numbers, style B
-
 const int fontCount = 46;
 const unsigned char font[46][5] = {
   {0x3f, 0x48, 0x48, 0x48, 0x3f},
@@ -63,11 +62,34 @@ const unsigned char font[46][5] = {
   {0x7f, 0x49, 0x49, 0x49, 0x7f},
   {0x79, 0x49, 0x49, 0x49, 0x7f}};
 
+// Get an index into the current font corresponding to the 
+// @letter    ASCII character to convert
+// @return    index into the current font corresponding to the letter,
+//            or 255 if not found.
+unsigned char fontGetAsciiChar(char letter)
+{
+  if (letter >= 65 && letter <= 90) {
+    // Uppercase
+    return letter - 65;
+  }
+  else if (letter >= 97 && letter <= 122) {
+    // Lowercase
+    return letter - 97;
+  }
+  else if (letter >= 48 && letter <= 57) {
+    // Number
+    return letter - 48 + 26;
+  }
+  else {
+    // we don't have a character for that, sorry!
+    return 255;
+  }
+}
+
 
 // Video buffer 80x7
 // green is arrays 0-6, red is 7-13
 unsigned char videoBuffer[14][10];
-
 
 // 7 pins that turn on the rows
 unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
@@ -91,27 +113,17 @@ char spi_transfer(volatile char data)
   return SPDR;                    // return the received byte
 }
 
+
 //  Draw a letter at any point in the display buffer
 //  letter  in ASCII
 //  offset  in leds from the origin
 //  color   String color (0 = green, 1 = red, 2 = yellow)
 void drawChar(char letter, unsigned char offset, unsigned char color)
 {
-  // First, convert the ASCII letter to the font
+  // First, convert the ASCII letter to a font offset
   // (kludge for current font)
-  if (letter >= 65 && letter <= 90) {
-    letter -= 65;
-  }
-  else if (letter >= 97 && letter <= 122) {
-    letter -= 97;
-  }
-  else if (letter >= 48 && letter <= 57) {
-    letter = letter - 48 + 26;
-  }
-  else {
-    // we don't have a character for that, sorry!
-    return;
-  }
+  unsigned char fontOffset = fontGetAsciiChar(letter);
+  if (fontOffset == 255) { return; }
   
   // Fix the color
   color += 1;
@@ -126,10 +138,10 @@ void drawChar(char letter, unsigned char offset, unsigned char color)
     
     for (int col = 0; col < 5; col++) {
       if( color & 0x1) {
-        videoBuffer[row][alignedCol] |= ((font[letter][col] >> row) & 0x1) << alignedOffset;
+        videoBuffer[row][alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
       }
       if( color & 0x2) {
-        videoBuffer[row + 7][alignedCol] |= ((font[letter][col] >> row) & 0x1) << alignedOffset;
+        videoBuffer[row + 7][alignedCol] |= ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
       }
       
       // Advance to the next offset
@@ -144,13 +156,14 @@ void drawChar(char letter, unsigned char offset, unsigned char color)
   }
 }
 
+
 // Draw a string at any point into the buffer
 //
 //  string  C-style string
 //  length  length of said string
 //  offset  byte offset to display string
 //  color   String color (0 = green, 1 = red, 2 = yellow)
-void drawString(char* string, char length, int offset, char color)
+void drawString(char* string, char length, int offset, unsigned char color)
 {
   for (int i = 0; i < length; i++) {
     drawChar(string[i], offset, color);
@@ -158,11 +171,41 @@ void drawString(char* string, char length, int offset, char color)
   }
 } 
 
-// Initialize the IO ports
-void setup()
+
+// Clear the video buffer
+void clearVideoBuffer()
 {
-  Serial.begin(9600);
-  
+  for (int i = 0; i < 14; i++) {
+    for (int j = 0; j < 10; j++) {
+      videoBuffer[i][j] = 0;
+    }
+  }
+}
+
+
+// TODO: Make this interrupt-based!
+void drawVideoBuffer()
+{
+  // For each row
+  for (int row = 0; row < 7; row++) {
+    // for each column
+    for (int col = 0; col < 10; col++) {
+      // Green
+      spi_transfer(videoBuffer[row][9-col]);
+      
+      // Then red
+      spi_transfer(videoBuffer[row+7][9-col]);
+    }
+    
+    digitalWrite(rowPins[row], HIGH);
+    delayMicroseconds(500);
+    digitalWrite(rowPins[row], LOW);    
+  }
+}
+
+
+void setupVideoBuffer()
+{
   byte clr;
   pinMode(DATAOUT, OUTPUT);
   pinMode(DATAIN, INPUT);
@@ -188,51 +231,33 @@ void setup()
   clearVideoBuffer();
 }
 
-// Clear the video buffer
-void clearVideoBuffer()
-{
-  for (int i = 0; i < 14; i++) {
-    for (int j = 0; j < 10; j++) {
-      videoBuffer[i][j] = 0;
-    }
-  }
-}
 
-// TODO: Make this interrupt-based!
-void drawVideoBuffer()
+// Initialize the IO ports
+void setup()
 {
-  // For each row
-  for (int row = 0; row < 7; row++) {
-    // for each column
-    for (int col = 0; col < 10; col++) {
-      // Green
-      spi_transfer(videoBuffer[row][9-col]);
-      
-      // Then red
-      spi_transfer(videoBuffer[row+7][9-col]);
-    }
-    
-    digitalWrite(rowPins[row], HIGH);
-    delayMicroseconds(500);
-    digitalWrite(rowPins[row], LOW);    
-  }
+  setupVideoBuffer();
+  
+  Serial.begin(9600);
 }
  
+
 // Main loop
 void loop()
 {
   for (int i = 0; i < 16; i++) {
     clearVideoBuffer();
-    drawString("HackPGH FTW", 11, 0+i, 1);
-    for (int j = 0; j < 30; j++) {
+    drawString("HackPGH", 7, 0+i, 0);
+    drawString("FTW", 3, 48+i, 2);
+    for (int j = 0; j < 25; j++) {
       drawVideoBuffer();
     }
   }
 
   for (int i = 14; i > 0; i--) {
     clearVideoBuffer();
-    drawString("HackPGH FTW", 11, 0+i, 1);
-    for (int j = 0; j < 30; j++) {
+    drawString("HackPGH", 7, 0+i, 1);
+    drawString("FTW", 3, 48+i, 2);
+    for (int j = 0; j < 25; j++) {
       drawVideoBuffer();
     }
   }
