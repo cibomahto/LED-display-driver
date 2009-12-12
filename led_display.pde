@@ -129,6 +129,18 @@ int videoCurrentRow;
 int videoCurrentCol;
 boolean videoFlipPage;
 
+
+#define USER_STRING_MAX_LENGTH 100
+char userStringInput[USER_STRING_MAX_LENGTH];
+char userStringInputLen;
+
+char userString[USER_STRING_MAX_LENGTH];
+char userStringLen;
+
+int scrollPosition;
+
+char startMessage[] = "HackPGH";
+
 // This function is called whenever the SPI is finished transferring a byte of data.
 ISR(SPI_STC_vect)
 {
@@ -351,27 +363,73 @@ void setup()
   setupVideoBuffer(DOUBLE_BUFFER);
   
   Serial.begin(9600);
+
+  for (int i = 0; i < 7; i++) {
+    userString[i] = startMessage[i];
+  }
+  
+  userStringLen = 7;
+  scrollPosition = COLS*8;
+  
+  userStringInputLen = 0;
+
 }
  
-
-char userString[100];
-char userStringLen = 0;
-
 
 // Main loop
 void loop()
 {
+  // Look for new serial input
+  if (Serial.available() > 0) {
+//    char a = Serial.read();
+    userStringInput[userStringInputLen] = Serial.read();
+//    userStringInput[userStringInputLen] = a;
+
+    Serial.print(userStringInput[userStringInputLen]);
+
+    // On enter, drop the message
+    if (userStringInput[userStringInputLen] == '?') {
+       
+      // Copy over the data...
+      userStringLen = userStringInputLen;
+      userStringInputLen = 0;
+      scrollPosition = COLS*8;
+      
+      // then copy over the data
+      for (int i = 0; i < userStringLen; i++) {
+        userString[i] = userStringInput[i];
+      }
+    }
+    else {
+      userStringInputLen++;
+    }
+  }
   
+  // Draw the next frame and wait a bit
+  clearVideoBuffer();
+  drawString(userString, userStringLen, scrollPosition, 0);
+  flipVideoBuffer();
+  delay(40);
+  
+  // Then update the scroll position
+  scrollPosition--;
+  if (scrollPosition < -userStringLen*8) {
+    scrollPosition = COLS*8;
+  }
+}
+
+  
+#if 0
   // Static scroll demo
   char testStr[] = "just look at this awesome led sign    just look at it";
   for (int i = 80; i > -53*6; i--) {
     clearVideoBuffer();
-    drawString(testStr, 53, i, 2);
+    drawString(testStr, 53, i, 0);
     flipVideoBuffer();
     delay(160);
   }
 
-  
+
   for (int j = 0; j < 2; j++) {
     // Text bounce demo
     for (int i = -8; i < 24; i++) {
@@ -392,28 +450,5 @@ void loop()
       delay(120);
     }
   }
+#endif
 
-  while (1) {
-    // Serial input demo
-    if(Serial.available() > 0) {
-      if (userStringLen > 12) {
-        for (int i = 0; i < 12; i++) {
-         userString[i] = userString[i+1];
-        } 
-    
-        userStringLen -= 1;
-      }
-    
-      // read the incoming byte:
-      userString[userStringLen] = Serial.read();
-    
-      userStringLen++;
-    
-      clearVideoBuffer();
-      drawString(userString, userStringLen, 0, 2);
-      flipVideoBuffer();
-    }
-  }
-
-
-}
