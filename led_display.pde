@@ -1,3 +1,5 @@
+#include <avr/pgmspace.h>
+
 // Sketch to drive a hacked 80x7 2-color LED display
 // By Matt Mets
 
@@ -14,6 +16,26 @@
 // 5x7 character font from:
 // http://heim.ifi.uio.no/haakoh/avr/font.h
 
+// Progmem stuff from:
+// http://www.arduino.cc/en/Reference/PROGMEM
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Hardware connections
+//////////////////////////////////////////////////////////////////////////////
+
+// Pins that control the row select lines
+unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
+
+#define DATAOUT 11      //MOSI
+#define DATAIN 12       //MISO - not used, but part of builtin SPI
+#define SPICLOCK  13    //SCK
+
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Font section
+//////////////////////////////////////////////////////////////////////////////
 #define FONT_BAD_CHARACTER 255
 
 // 0-25: letters
@@ -21,7 +43,7 @@
 // 37-47: numbers, style B
 const int fontCount = 46;
 const int fontWidth = 5;
-const unsigned char font[46][5] = {
+prog_uchar font[46][5] PROGMEM = {
   {0x3f, 0x48, 0x48, 0x48, 0x3f},
   {0x7f, 0x49, 0x49, 0x49, 0x36},
   {0x3e, 0x41, 0x41, 0x41, 0x22},
@@ -93,73 +115,64 @@ unsigned char fontGetAsciiChar(char letter)
   }
 }
 
+//////////////////////////////////////////////////////////////////////////////
+// Display driver section
+//////////////////////////////////////////////////////////////////////////////
 
-#define SINGLE_BUFFER 0
-#define DOUBLE_BUFFER 1
+#define SINGLE_BUFFER 1    // Single buffered mode
+#define DOUBLE_BUFFER 2    // Double buffered mode
 
-char displayMode;   // Either SINGLE_BUFFER or DOUBLE_BUFFER
+// Set this to DOUBLE_ BUFFER to enable double-buffered display,
+// or SINGLE_BUFFER to save memory.
+#define MAX_DISPLAY_MODE DOUBLE_BUFFER
 
-#define ROWS 7      // Note that there is a set of rows for each color, so 14 in total
-#define COLS 10
+#define DISPLAY_ROWS 7          // Number of rows in the display
+#define DISPLAY_COLS_B 10       // Number of 8-bit columns in the display
+#define DISPLAY_COLORS 2        // Number of colors in the display (must be 2)
 
-// Double 80x7 bi-color video buffer
+char displayMode;   // Current display mode, either SINGLE_BUFFER or DOUBLE_BUFFER
+
+// 80x7 bi-color video buffer
 // green is arrays 0-6, red is 7-13
 // Not a 2d array because then we couldn't point to it.
-unsigned char videoBuffer[2][ROWS*2 * COLS];
-
-// Display buffer is the one we are displaying.  Working buffer is the one we are assembling.
-unsigned char* displayBuffer;
-unsigned char* workBuffer;
+unsigned char videoBuffer[MAX_DISPLAY_MODE][DISPLAY_ROWS * DISPLAY_COLORS * DISPLAY_COLS_B];
 
 
-// 7 pins that turn on the rows
-unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
-
-// Colored stripes
-unsigned char testPatternB[] = {0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6,
-                                0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d,
-                                0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d, 0xdb, 0xb6, 0x6d};
-
-#define DATAOUT 11      //MOSI
-#define DATAIN 12       //MISO - not used, but part of builtin SPI
-#define SPICLOCK  13    //SCK
+unsigned char* displayBuffer;    // Buffer that is currently being displayed
+unsigned char* workBuffer;       // Buffer that is currently being drawn to.
+                                 // Note that for single-buffered systems,
+                                 // this might be the same as displayBuffer
 
 
-int videoCurrentRow;
-int videoCurrentCol;
-boolean videoFlipPage;
+int videoCurrentRow;        // Row that is currently being drawn
+int videoCurrentCol;        // Column that is currently being drawn
+boolean videoFlipPage;      // Flag to indicate that the video buffers
+                            // should be swapped after the current screen
+                            // draw is finished
 
 
-#define USER_STRING_MAX_LENGTH 100
-char userStringInput[USER_STRING_MAX_LENGTH];
-char userStringInputLen;
-
-char userString[USER_STRING_MAX_LENGTH];
-char userStringLen;
-
-int scrollPosition;
-
-char startMessage[] = "HackPGH";
-
-// This function is called whenever the SPI is finished transferring a byte of data.
+// This function is called when the SPI finishes transferring a byte of data.
 ISR(SPI_STC_vect)
 {
-  // Determine if there is more data to transfer in this row; otherwise, turn the row on
-  // and start a timer.
-  if (videoCurrentCol < COLS * 2) {
-    // Just transfer the next byte.  Note that we have to interleve green and red banks.
+  // Determine if there is more data to transfer in this row; otherwise, turn
+  // the row on and start a timer.
+  if (videoCurrentCol < DISPLAY_COLS_B * 2)
+  {
+    // Just transfer the next byte.  Note that we have to interleve green and
+    // red color banks.
     if (videoCurrentCol & 1) {  
-      SPDR = displayBuffer[(videoCurrentRow+7)*COLS + 9-(videoCurrentCol/2)];
+      SPDR = displayBuffer[(videoCurrentRow+7)*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
     }
     else {
-      SPDR = displayBuffer[videoCurrentRow*COLS + 9-(videoCurrentCol/2)];
+      SPDR = displayBuffer[videoCurrentRow*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
     }
     
     videoCurrentCol += 1;
   }
-  else {
-    // Turn on the row line, then start the timer.  The timer ISR is then expected to
-    // turn off the row and start the next column transmission.
+  else
+  {
+    // Turn on the row line, then start the timer.  The timer ISR is then
+    // expected to turn off the row and start the next column transmission.
 
     // Turn on the row
     digitalWrite(rowPins[videoCurrentRow], HIGH);
@@ -180,7 +193,8 @@ ISR(TIMER2_OVF_vect)
 
   // Advance the row count
   videoCurrentRow++;
-  if (videoCurrentRow >= ROWS) {
+  if (videoCurrentRow >= DISPLAY_ROWS)
+  {
     videoCurrentRow = 0;
     
     // If the page should be flipped, do it here.
@@ -206,7 +220,8 @@ ISR(TIMER2_OVF_vect)
 // @blocking    If true, wait until page has flipped before returning.
 void flipVideoBuffer(bool blocking = true)
 {
-  if (displayMode == DOUBLE_BUFFER) {
+  if (displayMode == DOUBLE_BUFFER)
+  {
     // Just set the flip flag, the buffer will flip between redraws
     videoFlipPage = true;
   
@@ -218,15 +233,10 @@ void flipVideoBuffer(bool blocking = true)
 }
 
 
-// Clear the video buffer
-// if we are in double-buffer mode, clear the back buffer, otherwise clear the front
+// Clear the working video buffer
 void clearVideoBuffer()
 {
-  for (int i = 0; i < 14; i++) {
-    for (int j = 0; j < 10; j++) {
-      workBuffer[i*COLS + j] = 0;
-    }
-  }
+   memset(workBuffer, 0, DISPLAY_ROWS * DISPLAY_COLS_B * DISPLAY_COLORS);
 }
 
 
@@ -234,22 +244,26 @@ void clearVideoBuffer()
 // @mode    either SINGLE_BUFFER or DOUBLE_BUFFER
 void setupVideoBuffer(int mode)
 {
-  if (mode == DOUBLE_BUFFER) {
+  byte clr;    // Dummy variable, used to clear garbage from SPI registers
+
+  // Only set double buffering if there is memory allocated for it
+  if (mode == DOUBLE_BUFFER && MAX_DISPLAY_MODE >= DOUBLE_BUFFER) {
     displayMode = DOUBLE_BUFFER;
   }
   else {
     displayMode = SINGLE_BUFFER;
   }
   
-  byte clr;
+  // Configure I/O pins for SPI port
   pinMode(DATAOUT, OUTPUT);
   pinMode(DATAIN, INPUT);
   pinMode(SPICLOCK,OUTPUT);
   
+  // TODO: Pin 10 interferes with the SPI port.  Why?
   pinMode(10, OUTPUT);
   digitalWrite(10, LOW);
   
-  // Set up SPI port
+  // Configure SPI port
   
   // SPCR = 11010000
   //interrupt enabled,spi enabled,msb 1st,master,clk low when idle,
@@ -265,11 +279,13 @@ void setupVideoBuffer(int mode)
   TIMSK2 = (1<<TOIE2);
   
   // Set up row select lines
-  for (int i = 0; i < sizeof(rowPins); i++) {
+  for (int i = 0; i < sizeof(rowPins); i++)
+  {
     pinMode(rowPins[i], OUTPUT);
     digitalWrite(rowPins[i], LOW);
   }
 
+  // Configure the display buffer pointers
   displayBuffer = videoBuffer[0];
   if (displayMode == SINGLE_BUFFER) {
     workBuffer = displayBuffer;
@@ -278,23 +294,23 @@ void setupVideoBuffer(int mode)
     workBuffer = videoBuffer[1];
   }
   
-  // Clear the front buffer
+  // Clear a buffer, then display it.
   clearVideoBuffer();
   flipVideoBuffer(false);
 
   // Jump start the display by writing to the SPI
   videoCurrentRow = 0;
   videoCurrentCol = 0;
-  SPDR = 0x55;
+  SPDR = 0x0;
 }
 
 
 // Draw a letter at any point in the display buffer
 // @letter  in ASCII
-// @offset  in leds from the origin
+// @offset  Column offset to draw the character
 // @color   String color (0 = green, 1 = red, 2 = yellow)
 void drawChar(char letter, int offset, unsigned char color)
-{
+{ 
   // Don't bother trying to draw if we are off the screen
   if (offset <= -fontWidth) {
     return;
@@ -302,29 +318,35 @@ void drawChar(char letter, int offset, unsigned char color)
   
   // Convert the ASCII letter to a font offset
   unsigned char fontOffset = fontGetAsciiChar(letter);
-  if (fontOffset == FONT_BAD_CHARACTER) { return; }
   
-  // Re-map the color into a bitfield
+  // If the character isn't available, don't draw it
+  // TODO: draw a rectangle, a la unicode?
+  if (fontOffset == FONT_BAD_CHARACTER) {
+    return;
+  }
+  
+  // Re-map the color into a bitfield (a hack!)
   color += 1;
-
-  int alignedCol = 0;
-  char alignedOffset = 0;
   
-  // Calculate which byte the character starts on, and the bit offset from that byte
-  alignedCol = offset/8;
-  alignedOffset = offset%8;
+  // Calculate which byte the character starts on, and the bit offset from
+  // that byte
+  int alignedCol = offset/8;
+  int alignedOffset = offset%8;
     
-  for (int col = 0; col < fontWidth; col++) {
-    if (alignedCol >= 0 && alignedOffset >= 0 && alignedCol < COLS) {
+  for (int col = 0; col < fontWidth; col++)
+  {
+    // If the current column is actually on the screen, draw it
+    if (alignedCol >= 0 && alignedOffset >= 0 && alignedCol < DISPLAY_COLS_B)
+    {
       if( color & 0x1) {          
-       for (int row = 0; row < 7; row++) {
-          workBuffer[row*COLS + alignedCol] |=
+        for (int row = 0; row < DISPLAY_ROWS; row++) {
+          workBuffer[row*DISPLAY_COLS_B + alignedCol] |=
                     ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
-       }
+        }
       }
       if( color & 0x2) {
-       for (int row = 0; row < 7; row++) {
-          workBuffer[(row + 7)*COLS + alignedCol] |=
+       for (int row = 0; row < DISPLAY_ROWS; row++) {
+          workBuffer[(row + DISPLAY_ROWS)*DISPLAY_COLS_B + alignedCol] |=
                     ((font[fontOffset][col] >> row) & 0x1) << alignedOffset;
        }
       }
@@ -345,10 +367,11 @@ void drawChar(char letter, int offset, unsigned char color)
 // Draw a string at any point into the buffer
 // @string  C-style string
 // @length  length of said string
-// @offset  byte offset to display string
+// @offset  column offset to display string
 // @color   String color (0 = green, 1 = red, 2 = yellow)
 // @spacing Amount of space between characters
-void drawString(char* string, char length, int offset, unsigned char color, unsigned int spacing = 1)
+void drawString(char* string, char length, int offset,
+                unsigned char color, unsigned int spacing = 1)
 {
   for (int i = 0; i < length; i++) {
     drawChar(string[i], offset, color);
@@ -357,48 +380,88 @@ void drawString(char* string, char length, int offset, unsigned char color, unsi
 } 
 
 
-// Initialize the IO ports
+// Draw a pixel on the working buffer
+// @color   Pixel color (0 = green, 1 = red, 2 = yellow)
+void drawPixel(unsigned char row, unsigned char offset, unsigned char color)
+{
+  // Re-map the color into a bitfield (a hack!)
+  color += 1;  
+
+  // Calculate which byte the pixel occupies, and the bit offset from
+  // that byte
+  int alignedCol = offset/8;
+  int alignedOffset = offset%8;
+
+  if( color & 0x1)
+  {
+    workBuffer[row*DISPLAY_COLS_B + alignedCol] |= 1 << alignedOffset;
+  }
+  if( color & 0x2)
+  {
+    workBuffer[(row + DISPLAY_ROWS)*DISPLAY_COLS_B + alignedCol] |=
+              1 << alignedOffset;
+  }
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Application
+//////////////////////////////////////////////////////////////////////////////
+
+#define USER_STRING_MAX_LENGTH 100    // Maximum length of a user message
+
+
+char userStringInput[USER_STRING_MAX_LENGTH];
+char userStringInputLen;
+
+char userString[USER_STRING_MAX_LENGTH];
+char userStringLen;
+
+int scrollPosition;
+
+prog_uchar startMessage[] PROGMEM = "HackPGH";
+
+
+// Program setup
 void setup()
 {
+  // Set up LED display, use double buffering if possible
   setupVideoBuffer(DOUBLE_BUFFER);
   
+  // Open the serial port at 9600 baud
   Serial.begin(9600);
 
-  for (int i = 0; i < 7; i++) {
+  // Copy in a welcome message
+  for (int i = 0; i < sizeof(startMessage); i++) {
     userString[i] = startMessage[i];
   }
   
-  userStringLen = 7;
-  scrollPosition = COLS*8;
-  
-  userStringInputLen = 0;
+  userStringLen = sizeof(startMessage);
+  scrollPosition = DISPLAY_COLS_B*8;    // Start at the end of the string
 
+  userStringInputLen = 0;
 }
- 
+
 
 // Main loop
 void loop()
 {
   // Look for new serial input
-  if (Serial.available() > 0) {
-//    char a = Serial.read();
+  if (Serial.available() > 0)
+  {
     userStringInput[userStringInputLen] = Serial.read();
-//    userStringInput[userStringInputLen] = a;
+//    Serial.print(userStringInput[userStringInputLen]);
 
-    Serial.print(userStringInput[userStringInputLen]);
-
-    // On enter, drop the message
-    if (userStringInput[userStringInputLen] == '?') {
-       
-      // Copy over the data...
+    // If we get the end character, copy over the message and begin displaying it
+    if (userStringInput[userStringInputLen] == '?' && userStringInputLen > 0)
+    {   
+      // Record the length information
       userStringLen = userStringInputLen;
       userStringInputLen = 0;
-      scrollPosition = COLS*8;
+      scrollPosition = DISPLAY_COLS_B*8;
       
-      // then copy over the data
-      for (int i = 0; i < userStringLen; i++) {
-        userString[i] = userStringInput[i];
-      }
+      // then copy over the message
+      memcpy ( userString, userStringInput, userStringLen );
     }
     else {
       userStringInputLen++;
@@ -414,22 +477,12 @@ void loop()
   // Then update the scroll position
   scrollPosition--;
   if (scrollPosition < -userStringLen*8) {
-    scrollPosition = COLS*8;
+    scrollPosition = DISPLAY_COLS_B*8;
   }
 }
 
   
 #if 0
-  // Static scroll demo
-  char testStr[] = "just look at this awesome led sign    just look at it";
-  for (int i = 80; i > -53*6; i--) {
-    clearVideoBuffer();
-    drawString(testStr, 53, i, 0);
-    flipVideoBuffer();
-    delay(160);
-  }
-
-
   for (int j = 0; j < 2; j++) {
     // Text bounce demo
     for (int i = -8; i < 24; i++) {
@@ -451,4 +504,3 @@ void loop()
     }
   }
 #endif
-
