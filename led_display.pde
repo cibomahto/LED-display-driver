@@ -168,9 +168,33 @@ unsigned char fontGetAsciiChar(unsigned char letter)
   }
 }
 
+
 //////////////////////////////////////////////////////////////////////////////
 // Display driver section
 //////////////////////////////////////////////////////////////////////////////
+
+// In-line text modifiers
+#define FOREGROUND_COLOR 0x1C  // Set the foreground color.  Color determined
+                               // by the following byte:
+                               //   0=black, 1=green, 2=red, 3=yellow
+#define BACKGROUND_COLOR 0x1D  // Set the background color.  Color determined
+                               // by the following byte:
+                               //   0=black, 1=green, 2=red, 3=yellow
+#define BLINK 0x1E             // Control blink tag.  0=off, 1=on
+
+
+#define BLINK_ON '1'
+#define BLINK_OFF '0'
+
+
+
+// Internal color bitfields.  Pass these to functions
+#define COLOR_BLACK 0                          // Black
+#define COLOR_GREEN 1                          // Green
+#define COLOR_RED 2                            // Red
+#define COLOR_YELLOW (COLOR_GREEN | COLOR_RED) // Yellow
+
+
 
 #define SINGLE_BUFFER 1    // Single buffered mode
 #define DOUBLE_BUFFER 2    // Double buffered mode
@@ -237,11 +261,9 @@ ISR(SPI_STC_vect)
   }
 }
 
-int timer_2_scratch = 0;
-
 // This function is called when timer2 overflows
 ISR(TIMER2_OVF_vect)
-{
+{ 
   // Turn off the timer (disable it's clock source)
   TCCR2B = 0;
   
@@ -251,7 +273,7 @@ ISR(TIMER2_OVF_vect)
   // Wait a bit for the current row to turn off (no joke!)
   // This prevents a faint ghost signal as the column data is shifted out.
   // For extra speed, make this a second call to the interrupt.
-  for (timer_2_scratch = 0; timer_2_scratch < 70; timer_2_scratch++) {};
+  for (unsigned int timer_2_scratch = 0; timer_2_scratch < 70; timer_2_scratch++) {};
 
   // Advance the row count
   videoCurrentRow++;
@@ -295,10 +317,23 @@ void flipVideoBuffer(bool blocking = true)
 }
 
 
-// Clear the working video buffer
-void clearVideoBuffer()
-{
-   memset(workBuffer, 0, DISPLAY_ROWS * DISPLAY_COLS_B * DISPLAY_COLORS);
+// Clear the working video buffer, optionally filling it with a color
+// @backColor  Color to fill the screen with (defaults to black)
+void clearVideoBuffer(unsigned char backColor = COLOR_BLACK)
+{ 
+  if (backColor & COLOR_GREEN) {  
+    memset(workBuffer, 0xFF, DISPLAY_ROWS * DISPLAY_COLS_B);
+  }
+  else {
+    memset(workBuffer, 0, DISPLAY_ROWS * DISPLAY_COLS_B);
+  }
+  
+  if (backColor & COLOR_RED) {  
+    memset(workBuffer + DISPLAY_ROWS * DISPLAY_COLS_B, 0xFF, DISPLAY_ROWS * DISPLAY_COLS_B);
+  }
+  else {
+    memset(workBuffer + DISPLAY_ROWS * DISPLAY_COLS_B, 0, DISPLAY_ROWS * DISPLAY_COLS_B);
+  }
 }
 
 
@@ -366,23 +401,14 @@ void setupVideoBuffer(int mode)
   SPDR = 0x0;
 }
 
-#define FOREGROUND_COLOR 0x1C
-#define BACKGROUND_COLOR 0x1D
-
-#define COLOR_BLACK '0'
-#define COLOR_GREEN '1'
-#define COLOR_RED '2'
-#define COLOR_YELLOW '3'
-//#define COLOR_STRIPED '4'
-
 
 // Draw a letter at any point in the display buffer
 // @letter    in ASCII
 // @offset    Column offset to draw the character
-// @foreColor Foreground color
-// @backColor Background color
-void drawChar(unsigned char letter, int offset,
-              unsigned char foreColor, unsigned char backColor)
+// @color     Foreground color
+void drawChar(unsigned char letter,
+              int offset,
+              unsigned char color)
 { 
   // Don't bother trying to draw if we are off the screen
   if (offset <= -FONT_WIDTH) {
@@ -397,52 +423,42 @@ void drawChar(unsigned char letter, int offset,
   if (fontOffset == FONT_BAD_CHARACTER) {
     return;
   }
-  
-  // Re-map the color into a bitfield
-  switch (foreColor) {
-    case COLOR_BLACK:   foreColor = 0x0;   break;
-    case COLOR_GREEN:   foreColor = 0x1;   break;
-    case COLOR_RED:     foreColor = 0x2;   break;
-    case COLOR_YELLOW:  foreColor = 0x3;   break;  
-    default:            foreColor = 0x1;   break;
-  }
 
-  switch (backColor) {
-    case COLOR_BLACK:   backColor = 0x0;   break;
-    case COLOR_GREEN:   backColor = 0x1;   break;
-    case COLOR_RED:     backColor = 0x2;   break;
-    case COLOR_YELLOW:  backColor = 0x3;   break;  
-    default:            backColor = 0x1;   break;
-  }
-  
   // Calculate which byte the character starts on, and the bit offset from
   // that byte
   int alignedCol = offset/8;
   int alignedOffset = offset%8;
    
-  unsigned char font_data = ' '; 
   for (int col = 0; col < FONT_WIDTH; col++)
   {
     // If the current column is actually on the screen, draw it
     if (alignedCol >= 0 && alignedOffset >= 0 && alignedCol < DISPLAY_COLS_B)
     {
       // Look up the character
-      font_data = pgm_read_byte_near(font + fontOffset*FONT_WIDTH + col);
-      
-      if( foreColor & 0x1) {          
-        for (int row = 0; row < DISPLAY_ROWS; row++) {
-          workBuffer[row*DISPLAY_COLS_B + alignedCol] |=
-                    ((font_data >> row) & 0x1) << alignedOffset;
+      unsigned char font_data = pgm_read_byte_near(font + fontOffset*FONT_WIDTH + col);
+
+      // Then draw it row by row, because the font is stored that way
+      for (int row = 0; row < DISPLAY_ROWS; row++) {
+        // Precompute bit position and 
+        unsigned char newBit = ((font_data >> row) & 0x1) << alignedOffset;
+        unsigned char bufferOffset = row*DISPLAY_COLS_B + alignedCol;
+        
+        if (color & COLOR_GREEN) {
+          workBuffer[bufferOffset] |= newBit;
+        }
+        else {
+          workBuffer[bufferOffset] &= ~newBit;
+        }
+        
+        if (color & COLOR_RED) {
+          workBuffer[bufferOffset + DISPLAY_ROWS*DISPLAY_COLS_B] |= newBit;
+        }
+        else {
+          workBuffer[bufferOffset + DISPLAY_ROWS*DISPLAY_COLS_B] &= ~newBit;
         }
       }
-      if( foreColor & 0x2) {
-       for (int row = 0; row < DISPLAY_ROWS; row++) {
-          workBuffer[(row + DISPLAY_ROWS)*DISPLAY_COLS_B + alignedCol] |=
-                    ((font_data >> row) & 0x1) << alignedOffset;
-       }
-      }
     }
-        
+ 
     // Advance to the next offset
     alignedOffset++;
       
@@ -461,70 +477,125 @@ void drawChar(unsigned char letter, int offset,
 //            Background color: 0x1d [color]
 // @length    length of said string
 // @offset    column offset to display string
-
-// @foreColor Foreground color
-// @backColor Background color
+// @color     Starting color (can be modified by inline modifiers)
 // @spacing   Amount of space between characters
-// @return    String display length (excludes in-line modifiers)
-unsigned char drawString(unsigned char* string,
-              unsigned char length, int offset,
-              unsigned char foreColor = COLOR_GREEN,
-              unsigned char backColor = COLOR_BLACK,
-              unsigned int spacing = 1)
+void drawString(unsigned char* string,
+                unsigned char length,
+                int offset,
+                unsigned char color = COLOR_GREEN,
+                unsigned int spacing = 1)
 {
-  unsigned char actualLength = length;
-  
+  // blink Phase, note that this only works if drawString is only called once per display...
+  static unsigned char blinkPhase;
+
+  blinkPhase = (blinkPhase + 1) % 4;
+
+  boolean blinkMode = false;
+    
   for (int i = 0; i < length; i++) {
     if (string[i] == FOREGROUND_COLOR) {
-      actualLength--;
-      
-        actualLength--;
-        foreColor = string[i+1];
+      if (i + 1 < length) {
+        // Re-map the color into a bitfield
+        switch (string[i+1]) {
+          case '0':    color=COLOR_BLACK;   break;
+          case '1':    color=COLOR_GREEN;   break;
+          case '2':    color=COLOR_RED;     break;
+          case '3':    color=COLOR_YELLOW;  break;
+        }
         i++;
+      }
     }
-
-    else if (string[i] == BACKGROUND_COLOR) {
-      actualLength--;
-
-        actualLength--;      
-        backColor = string[i+1];
+    else if (string[i] == BLINK) {
+      // Turn the blink tag on or off
+      if (i + 1 < length) {
+        switch (string[i+1]) {
+          case BLINK_ON:  blinkMode = true;  break;
+          case BLINK_OFF: blinkMode = false; break;
+        }
         i++;
-    }      
+      }
+    }
+    else if (string[i] == BACKGROUND_COLOR) {
+      // Don't deal with background colors here, only in processString()
+      if (i + 1 < length) {
+        i++;
+      }
+    }
     else {
-      drawChar(string[i], offset, foreColor, backColor);
+      // Finally, if we are in the right 
+      if (!(blinkMode && blinkPhase < 2)) {
+        drawChar(string[i], offset, color);
+      }
+      
       offset += FONT_WIDTH + spacing;
     }
   }
-  
-  return actualLength;
 } 
 
 
-// Draw a pixel on the working buffer
+// Determine the display length and background color of a string
+// @string    C-style string, with optional in-line modifier strings:
+//            Foreground color: 0x1C_, where _ is a color
+//            Background color: 0x1d_, where _ is a color
+//            Blink: 0x1e_, where _ is 1 for on, 0 for off
+//            
+// @length    length of said string
+// [output] @displayLength  Display length = total length - nonprinting characters
+// [output] @backColor Background color (last one in string)
+void processString(unsigned char* string,
+                   unsigned char length,
+                   unsigned char& displayLength,
+                   unsigned char& backColor)
+{
+  displayLength = length;
+    
+  for (int i = 0; i < length; i++) {
+    if ((string[i] == FOREGROUND_COLOR) || (string[i] == BLINK)) {
+      // Skip over foreground color and blink tags, but subtract their lengths
+      displayLength--;
+      
+      if (i + 1 < length) {      
+        displayLength--;
+        i++;
+      }
+    }
+    else if (string[i] == BACKGROUND_COLOR) {
+      // Record background color, overwriting any previous ones
+      displayLength--;
+      
+      if (i + 1 < length) {
+        displayLength--;      
+        switch (string[i+1]) {
+          case '0':    backColor=COLOR_BLACK;   break;
+          case '1':    backColor=COLOR_GREEN;   break;
+          case '2':    backColor=COLOR_RED;     break;
+          case '3':    backColor=COLOR_YELLOW;  break;
+        }
+
+        i++;
+      }
+
+    }
+  }
+}
+
+
+// Draw a pixel on the working buffer (untested!)
 // @row     Pixel row, from top
 // @offset  Pixel column, from left
 // @color   Pixel color
-void drawPixel(unsigned char row, unsigned char offset, unsigned char foreColor)
+void drawPixel(unsigned char row, unsigned char offset, unsigned char color)
 {
-  // Re-map the color into a bitfield (a hack!)
-  switch (foreColor) {
-    case COLOR_BLACK:   foreColor = 0x0;   break;
-    case COLOR_GREEN:   foreColor = 0x1;   break;
-    case COLOR_RED:     foreColor = 0x2;   break;
-    case COLOR_YELLOW:  foreColor = 0x3;   break;  
-    default:            foreColor = 0x1;   break;
-  }
-
   // Calculate which byte the pixel occupies, and the bit offset from
   // that byte
   int alignedCol = offset/8;
   int alignedOffset = offset%8;
 
-  if( foreColor & 0x1)
+  if (color & COLOR_GREEN)
   {
     workBuffer[row*DISPLAY_COLS_B + alignedCol] |= 1 << alignedOffset;
   }
-  if( foreColor & 0x2)
+  if (color & COLOR_RED)
   {
     workBuffer[(row + DISPLAY_ROWS)*DISPLAY_COLS_B + alignedCol] |=
               1 << alignedOffset;
@@ -538,17 +609,30 @@ void drawPixel(unsigned char row, unsigned char offset, unsigned char foreColor)
 
 #define USER_STRING_MAX_LENGTH 200    // Maximum length of a user message
 
-
+// Input buffer, unfinished user input goes here
 unsigned char userStringInput[USER_STRING_MAX_LENGTH];
 unsigned char userStringInputLen;
 
+// Display buffer, currently being drawn
 unsigned char userString[USER_STRING_MAX_LENGTH];
 unsigned char userStringLen;
-unsigned char userStringDisplayLength;
+unsigned char userStringDisplayLen;
+
+// Current 
+unsigned char backColor;
 
 int scrollPosition;
 
-prog_uchar startMessage[] PROGMEM = "HackPGH";
+// Default message
+prog_uchar startMessage[] PROGMEM =
+  "\x1d" "0"                      // background color = black
+  "\x1c" "3" "Welcome to "        // text color = yellow, text "Welcome to"
+  "\x1c" "1" "Hack Pittsburg   "  // text color = green, text "Hack Pittsburgh"
+  "\x1c" "2" "Sign of "           // text color = red, text "Sign of"
+  "\x1e" "1"                      // blink on
+  "doom "                         // text "doom"
+  "\x1e" "0"                      // blink off
+  "!!!!!!!1011";                  // text "doom"
 
 
 // Program setup
@@ -565,9 +649,13 @@ void setup()
     userString[i] = pgm_read_byte_near(startMessage + i);
   }
   
-  userStringLen = sizeof(startMessage) - 1;
-  scrollPosition = DISPLAY_COLS_B*8;    // Start at the end of the string
+  userStringLen = sizeof(startMessage) - 1;  // Ignore the null zero
+  scrollPosition = DISPLAY_COLS_B*8;         // Start at the end of the screen
 
+  // Process the welcome message to determine length and background color
+  processString(userString, userStringLen, userStringDisplayLen, backColor);
+
+  // And clear the input buffer for the first message
   userStringInputLen = 0;
 }
 
@@ -581,9 +669,9 @@ void loop()
     unsigned char new_data = Serial.read();
 //    Serial.print(new_data);
 
-    // If we got a new line signal, see if we have a message
+    // If we got a new line signal, see if there is a message
     if (new_data == '\n' || new_data == '\r') {
-      // If we got a blank line, ignore it
+      // Only proceed if there is actually data
       if (userStringInputLen > 0) {
         // Record the length information
         userStringLen = userStringInputLen;
@@ -591,6 +679,11 @@ void loop()
       
         // then copy over the message
         memcpy ( userString, userStringInput, userStringLen );
+        
+        // Determine the display length (total length minus inline control characters)
+        // and background color of the string
+        processString( userString, userStringLen,
+                       userStringDisplayLen, backColor );
         
         // Finally, set the text to scroll in from the end
         scrollPosition = DISPLAY_COLS_B*8;
@@ -611,14 +704,14 @@ void loop()
   }
   
   // Draw the next frame and wait a bit
-  clearVideoBuffer();
-  userStringDisplayLength = drawString(userString, userStringLen, scrollPosition);
+  clearVideoBuffer(backColor);
+  drawString(userString, userStringLen, scrollPosition);
   flipVideoBuffer();
   delay(40);
   
   // Then update the scroll position
   scrollPosition--;
-  if (scrollPosition < -userStringDisplayLength*6) {
+  if (scrollPosition < -userStringDisplayLen*6) {
     scrollPosition = DISPLAY_COLS_B*8;
   }
 }
