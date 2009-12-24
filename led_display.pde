@@ -84,7 +84,7 @@ prog_uchar font[FONT_COUNT * FONT_WIDTH] PROGMEM = {
   0x08, 0x14, 0x14, 0x22, 0x22, // <
   0x14, 0x14, 0x14, 0x14, 0x14, // =
   0x22, 0x22, 0x14, 0x14, 0x08, // >
-  0x20, 0x40, 0x4d, 0x48, 0x18, // ?
+  0x20, 0x40, 0x4d, 0x48, 0x38, // ?
   0x3e, 0x41, 0x5d, 0x55, 0x1f, // @
   0x3f, 0x48, 0x48, 0x48, 0x3f, // A
   0x7f, 0x49, 0x49, 0x49, 0x36, // B
@@ -156,7 +156,7 @@ prog_uchar font[FONT_COUNT * FONT_WIDTH] PROGMEM = {
 // @letter    ASCII character to convert
 // @return    index into the current font corresponding to the letter,
 //            or 255 if not found.
-unsigned char fontGetAsciiChar(char letter)
+unsigned char fontGetAsciiChar(unsigned char letter)
 {
   if (letter >= 32 && letter <= 126) {
     // one of the ascii chars we represent
@@ -183,7 +183,7 @@ unsigned char fontGetAsciiChar(char letter)
 #define DISPLAY_COLS_B 10       // Number of 8-bit columns in the display
 #define DISPLAY_COLORS 2        // Number of colors in the display (must be 2)
 
-char displayMode;   // Current display mode, either SINGLE_BUFFER or DOUBLE_BUFFER
+unsigned char displayMode;   // Current display mode, either SINGLE_BUFFER or DOUBLE_BUFFER
 
 // 80x7 bi-color video buffer
 // green is arrays 0-6, red is 7-13
@@ -214,10 +214,12 @@ ISR(SPI_STC_vect)
     // Just transfer the next byte.  Note that we have to interleve green and
     // red color banks.
     if (videoCurrentCol & 1) {
-      SPDR = displayBuffer[(videoCurrentRow+7)*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
+      SPDR = displayBuffer
+               [(videoCurrentRow+7)*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
     }
     else {
-      SPDR = displayBuffer[videoCurrentRow*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
+      SPDR = displayBuffer
+               [videoCurrentRow*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
     }
     
     videoCurrentCol += 1;
@@ -235,6 +237,8 @@ ISR(SPI_STC_vect)
   }
 }
 
+int timer_2_scratch = 0;
+
 // This function is called when timer2 overflows
 ISR(TIMER2_OVF_vect)
 {
@@ -243,6 +247,11 @@ ISR(TIMER2_OVF_vect)
   
   // Turn off the current row
   digitalWrite(rowPins[videoCurrentRow], LOW);
+
+  // Wait a bit for the current row to turn off (no joke!)
+  // This prevents a faint ghost signal as the column data is shifted out.
+  // For extra speed, make this a second call to the interrupt.
+  for (timer_2_scratch = 0; timer_2_scratch < 70; timer_2_scratch++) {};
 
   // Advance the row count
   videoCurrentRow++;
@@ -362,7 +371,7 @@ void setupVideoBuffer(int mode)
 // @letter  in ASCII
 // @offset  Column offset to draw the character
 // @color   String color (0 = green, 1 = red, 2 = yellow)
-void drawChar(char letter, int offset, unsigned char color)
+void drawChar(unsigned char letter, int offset, unsigned char color)
 { 
   // Don't bother trying to draw if we are off the screen
   if (offset <= -FONT_WIDTH) {
@@ -427,7 +436,7 @@ void drawChar(char letter, int offset, unsigned char color)
 // @offset  column offset to display string
 // @color   String color (0 = green, 1 = red, 2 = yellow)
 // @spacing Amount of space between characters
-void drawString(char* string, char length, int offset,
+void drawString(unsigned char* string, unsigned char length, int offset,
                 unsigned char color, unsigned int spacing = 1)
 {
   for (int i = 0; i < length; i++) {
@@ -468,11 +477,11 @@ void drawPixel(unsigned char row, unsigned char offset, unsigned char color)
 #define USER_STRING_MAX_LENGTH 150    // Maximum length of a user message
 
 
-char userStringInput[USER_STRING_MAX_LENGTH];
-char userStringInputLen;
+unsigned char userStringInput[USER_STRING_MAX_LENGTH];
+unsigned char userStringInputLen;
 
-char userString[USER_STRING_MAX_LENGTH];
-char userStringLen;
+unsigned char userString[USER_STRING_MAX_LENGTH];
+unsigned char userStringLen;
 
 int scrollPosition;
 
@@ -502,34 +511,43 @@ void setup()
 
 // Main loop
 void loop()
-{ 
+{
   // Look for new serial input
   if (Serial.available() > 0)
   {
-    userStringInput[userStringInputLen] = Serial.read();
-//    Serial.print(userStringInput[userStringInputLen]);
+    unsigned char new_data = Serial.read();
+//    Serial.print(new_data);
 
-    // If we get the end character, copy over the message and begin displaying it
-    if (userStringInput[userStringInputLen] == '\n'
-     || userStringInput[userStringInputLen] == '\r')
-    {
+    // If we got a new line signal, see if we have a message
+    if (new_data == '\n' || new_data == '\r') {
       // If we got a blank line, ignore it
       if (userStringInputLen > 0) {
         // Record the length information
         userStringLen = userStringInputLen;
         userStringInputLen = 0;
-        scrollPosition = DISPLAY_COLS_B*8;
       
         // then copy over the message
         memcpy ( userString, userStringInput, userStringLen );
+        
+        // Finally, set the text to scroll in from the end
+        scrollPosition = DISPLAY_COLS_B*8;
       }
     }
-    else {
-      // Increment the counter, unless we are already at the max length
-      if (userStringInputLen < USER_STRING_MAX_LENGTH) {
-        userStringInputLen++;
+    // Handle backspace
+    else if (new_data == 0x08) {
+      if (userStringInputLen > 0) {
+        userStringInputLen--;
       }
     }
+    else if (userStringInputLen < USER_STRING_MAX_LENGTH)
+    {
+      // Add the new character to the message and increment
+      userStringInput[userStringInputLen] = new_data;
+      userStringInputLen++;
+    }
+    
+    Serial.print(userStringInputLen, DEC);
+    Serial.print("\r\n");
   }
   
   // Draw the next frame and wait a bit
@@ -540,7 +558,7 @@ void loop()
   
   // Then update the scroll position
   scrollPosition--;
-  if (scrollPosition < -userStringLen*8) {
+  if (scrollPosition < -userStringLen*6) {
     scrollPosition = DISPLAY_COLS_B*8;
   }
 }
