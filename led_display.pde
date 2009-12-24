@@ -148,7 +148,7 @@ prog_uchar font[FONT_COUNT * FONT_WIDTH] PROGMEM = {
   0x08, 0x08, 0x36, 0x41, 0x41, // {
   0x00, 0x00, 0x7f, 0x00, 0x00, // |
   0x41, 0x41, 0x36, 0x08, 0x08, // }
-  0x10, 0x20, 0x10, 0x10, 0x20  // ~
+  0x04, 0x10, 0x04, 0x04, 0x10  // ~
 };
 
 
@@ -187,7 +187,7 @@ char displayMode;   // Current display mode, either SINGLE_BUFFER or DOUBLE_BUFF
 
 // 80x7 bi-color video buffer
 // green is arrays 0-6, red is 7-13
-// Not a 2d array because then we couldn't point to it.
+// Individual buffers are not 2d arrays because then we couldn't point to them
 unsigned char videoBuffer[MAX_DISPLAY_MODE][DISPLAY_ROWS * DISPLAY_COLORS * DISPLAY_COLS_B];
 
 
@@ -465,7 +465,7 @@ void drawPixel(unsigned char row, unsigned char offset, unsigned char color)
 // Application
 //////////////////////////////////////////////////////////////////////////////
 
-#define USER_STRING_MAX_LENGTH 100    // Maximum length of a user message
+#define USER_STRING_MAX_LENGTH 150    // Maximum length of a user message
 
 
 char userStringInput[USER_STRING_MAX_LENGTH];
@@ -489,11 +489,11 @@ void setup()
   Serial.begin(9600);
 
   // Copy in a welcome message
-  for (int i = 0; i < sizeof(startMessage); i++) {
+  for (int i = 0; i < sizeof(startMessage) - 1; i++) {
     userString[i] = pgm_read_byte_near(startMessage + i);
   }
   
-  userStringLen = sizeof(startMessage);
+  userStringLen = sizeof(startMessage) - 1;
   scrollPosition = DISPLAY_COLS_B*8;    // Start at the end of the string
 
   userStringInputLen = 0;
@@ -510,18 +510,25 @@ void loop()
 //    Serial.print(userStringInput[userStringInputLen]);
 
     // If we get the end character, copy over the message and begin displaying it
-    if (userStringInput[userStringInputLen] == '?' && userStringInputLen > 0)
-    {   
-      // Record the length information
-      userStringLen = userStringInputLen;
-      userStringInputLen = 0;
-      scrollPosition = DISPLAY_COLS_B*8;
+    if (userStringInput[userStringInputLen] == '\n'
+     || userStringInput[userStringInputLen] == '\r')
+    {
+      // If we got a blank line, ignore it
+      if (userStringInputLen > 0) {
+        // Record the length information
+        userStringLen = userStringInputLen;
+        userStringInputLen = 0;
+        scrollPosition = DISPLAY_COLS_B*8;
       
-      // then copy over the message
-      memcpy ( userString, userStringInput, userStringLen );
+        // then copy over the message
+        memcpy ( userString, userStringInput, userStringLen );
+      }
     }
     else {
-      userStringInputLen++;
+      // Increment the counter, unless we are already at the max length
+      if (userStringInputLen < USER_STRING_MAX_LENGTH) {
+        userStringInputLen++;
+      }
     }
   }
   
@@ -537,27 +544,3 @@ void loop()
     scrollPosition = DISPLAY_COLS_B*8;
   }
 }
-
-  
-#if 0
-  for (int j = 0; j < 2; j++) {
-    // Text bounce demo
-    for (int i = -8; i < 24; i++) {
-      clearVideoBuffer();
-      drawString("HackPGH", 7, 0+i, 0);
-      drawString("FTW", 3, 48+i, 2);
-    
-      flipVideoBuffer();
-      delay(120);
-    }
-
-    for (int i = 22; i > -8; i--) {
-      clearVideoBuffer();
-      drawString("HackPGH", 7, 0+i, 1);
-      drawString("FTW", 3, 48+i, 2);
-    
-      flipVideoBuffer();
-      delay(120);
-    }
-  }
-#endif
