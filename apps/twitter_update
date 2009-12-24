@@ -3,5 +3,5 @@
 SEARCH='hackpgh OR hackpittsburgh OR "hack pittsburgh"'
 LED_SIGN=/dev/tts/1
 
-wget -q -O - "http://search.twitter.com/search.json?show_user=true&rpp=1&q=$SEARCH" |  sed -e 's/^.*"from_user":"\([^"]*\)".*"text":"\([^"]*\)".*/\1: \2?/' > $LED_SIGN
-
+wget -q -O - "http://search.twitter.com/search.json?show_user=true&rpp=1&q=$SEARCH" \
+     |  sed -e 's/^.*"from_user":"\([^"]*\)".*"text":"\([^"]*\)".*/'`echo -e "\x1c"`'2\1: '`echo -e "\x1c"`'1\2\n/' > $LED_SIGN
