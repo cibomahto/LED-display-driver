@@ -1,0 +1,33 @@
+LED_SIGN=/dev/tts/1
+
+# Text formatting
+# Foreground color: \x1c_, where _ is a color
+# Background color: \x1d_, where _ is a color (one per message)
+# Blink: turn on: \x1e1, turn off: \x1e0
+
+# echo -e "\x1d2" "\x1c0" "test " "\x1c1\x1e1" "test " "\x1e0\x1c3" "test!!" > $LED_SIGN
+
+echo -e "\x1d0" \
+        "\x1c3welcome to" \
+        "\x1c1hack pittsburgh" \
+        "\x1c2sign of" \
+        "\x1e1doom\x1e0" \
+        "!!!!!111011" \
+        > $LED_SIGN
+sleep 23
+
+echo -e "\x1d2" \
+        "\x1c3red" \
+        "\x1c0background   " \
+        > $LED_SIGN
+sleep 9
+
+echo -e "\x1d3" \
+        "\x1c0caution police line do not cross" \
+        > $LED_SIGN
+
+sleep 15
+
+echo -e "\x1d0" \
+        "\x1c3Thanks for watching!" \
+        > $LED_SIGN
