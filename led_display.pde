@@ -627,7 +627,7 @@ int scrollPosition;
 prog_uchar startMessage[] PROGMEM =
   "\x1d" "0"                      // background color = black
   "\x1c" "3" "Welcome to "        // text color = yellow, text "Welcome to"
-  "\x1c" "1" "Hack Pittsburg   "  // text color = green, text "Hack Pittsburgh"
+  "\x1c" "1" "Hack Pittsburgh  "  // text color = green, text "Hack Pittsburgh"
   "\x1c" "2" "Sign of "           // text color = red, text "Sign of"
   "\x1e" "1"                      // blink on
   "doom "                         // text "doom"
