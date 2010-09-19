@@ -25,13 +25,16 @@
 //////////////////////////////////////////////////////////////////////////////
 
 // I/O pins that control the row select lines
-unsigned char rowPins[] = {2, 3, 4, 5, 6, 7, 8};
+unsigned char rowPins[] = { 2, 3, 4, 5, 6, 7, 8};
+
+uint16_t extCount;
 
 // Serial pins that control the column display
-#define DATAOUT 11      //MOSI
-#define DATAIN 12       //MISO - not used, but part of builtin SPI
-#define SPICLOCK  13    //SCK
+#define DATAOUT 11      // MOSI
+#define DATAIN 12       // MISO - not used, but part of builtin SPI
+#define SPICLOCK  13    // SCK
 
+#define EXTOUTPUT 10     // Output to switch some external thing
 
 //////////////////////////////////////////////////////////////////////////////
 // Font section
@@ -181,7 +184,7 @@ unsigned char fontGetAsciiChar(unsigned char letter)
                                // by the following byte:
                                //   0=black, 1=green, 2=red, 3=yellow
 #define BLINK 0x1E             // Control blink tag.  0=off, 1=on
-
+#define EXT_ON 0x1F            // Control external devices.
 
 #define BLINK_ON '1'
 #define BLINK_OFF '0'
@@ -245,7 +248,7 @@ ISR(SPI_STC_vect)
       SPDR = displayBuffer
                [videoCurrentRow*DISPLAY_COLS_B + 9-(videoCurrentCol/2)];
     }
-    
+
     videoCurrentCol += 1;
   }
   else
@@ -255,7 +258,7 @@ ISR(SPI_STC_vect)
 
     // Turn on the row
     digitalWrite(rowPins[videoCurrentRow], HIGH);
-    
+
     // Start the timer
     TCCR2B = (1<<CS22)|(0<<CS21)|(0<<CS20);
   }
@@ -266,7 +269,7 @@ ISR(TIMER2_OVF_vect)
 { 
   // Turn off the timer (disable it's clock source)
   TCCR2B = 0;
-  
+
   // Turn off the current row
   digitalWrite(rowPins[videoCurrentRow], LOW);
 
@@ -280,12 +283,12 @@ ISR(TIMER2_OVF_vect)
   if (videoCurrentRow >= DISPLAY_ROWS)
   {
     videoCurrentRow = 0;
-    
+
     // If the page should be flipped, do it here.
     if (videoFlipPage && displayMode == DOUBLE_BUFFER)
     {
       videoFlipPage = false;
-      
+
       unsigned char* temp = displayBuffer;
       displayBuffer = workBuffer;
       workBuffer = temp;
@@ -294,6 +297,15 @@ ISR(TIMER2_OVF_vect)
 
   // Reset the column count
   videoCurrentCol = 0;
+
+  // Decide if we should turn off the external output
+  if (extCount > 0) {
+    extCount--;
+
+    if (extCount == 0) {
+      digitalWrite(EXTOUTPUT, HIGH);
+    }
+  }
 
   // Drop out nothing to start the next column display loop
   SPDR = 0;
@@ -308,7 +320,7 @@ void flipVideoBuffer(bool blocking = true)
   {
     // Just set the flip flag, the buffer will flip between redraws
     videoFlipPage = true;
-  
+
     // If we are blocking, sit here until the page flips.
     while (blocking && videoFlipPage) {
       delay(1);
@@ -327,7 +339,7 @@ void clearVideoBuffer(unsigned char backColor = COLOR_BLACK)
   else {
     memset(workBuffer, 0, DISPLAY_ROWS * DISPLAY_COLS_B);
   }
-  
+
   if (backColor & COLOR_RED) {  
     memset(workBuffer + DISPLAY_ROWS * DISPLAY_COLS_B, 0xFF, DISPLAY_ROWS * DISPLAY_COLS_B);
   }
@@ -350,18 +362,18 @@ void setupVideoBuffer(int mode)
   else {
     displayMode = SINGLE_BUFFER;
   }
-  
+
   // Configure I/O pins for SPI port
   pinMode(DATAOUT, OUTPUT);
   pinMode(DATAIN, INPUT);
   pinMode(SPICLOCK,OUTPUT);
-  
+
   // TODO: Pin 10 interferes with the SPI port.  Why?
   pinMode(10, OUTPUT);
   digitalWrite(10, LOW);
-  
+
   // Configure SPI port
-  
+
   // SPCR = 11010000
   //interrupt enabled,spi enabled,msb 1st,master,clk low when idle,
   //sample on leading edge of clk,system clock/4 (fastest)
@@ -369,12 +381,12 @@ void setupVideoBuffer(int mode)
   clr=SPSR;
   clr=SPDR;
   delay(10);
-  
+
   // Set up Timer 2 to generate interrupts on overflow (don't start it, though)
   TCCR2A = 0;
   TCCR2B = 0;
   TIMSK2 = (1<<TOIE2);
-  
+
   // Set up row select lines
   for (int i = 0; i < sizeof(rowPins); i++)
   {
@@ -390,7 +402,7 @@ void setupVideoBuffer(int mode)
   else {
     workBuffer = videoBuffer[1];
   }
-  
+
   // Clear a buffer, then display it.
   clearVideoBuffer();
   flipVideoBuffer(false);
@@ -428,7 +440,7 @@ void drawChar(unsigned char letter,
   // that byte
   int alignedCol = offset/8;
   int alignedOffset = offset%8;
-   
+
   for (int col = 0; col < FONT_WIDTH; col++)
   {
     // If the current column is actually on the screen, draw it
@@ -442,14 +454,14 @@ void drawChar(unsigned char letter,
         // Precompute bit position and 
         unsigned char newBit = ((font_data >> row) & 0x1) << alignedOffset;
         unsigned char bufferOffset = row*DISPLAY_COLS_B + alignedCol;
-        
+
         if (color & COLOR_GREEN) {
           workBuffer[bufferOffset] |= newBit;
         }
         else {
           workBuffer[bufferOffset] &= ~newBit;
         }
-        
+
         if (color & COLOR_RED) {
           workBuffer[bufferOffset + DISPLAY_ROWS*DISPLAY_COLS_B] |= newBit;
         }
@@ -458,10 +470,10 @@ void drawChar(unsigned char letter,
         }
       }
     }
- 
+
     // Advance to the next offset
     alignedOffset++;
-      
+
     // If we walk out of the current column byte, advance to the next
     if (alignedOffset > 7) {
       alignedOffset = 0;
@@ -491,7 +503,7 @@ void drawString(unsigned char* string,
   blinkPhase = (blinkPhase + 1) % 4;
 
   boolean blinkMode = false;
-    
+
   for (int i = 0; i < length; i++) {
     if (string[i] == FOREGROUND_COLOR) {
       if (i + 1 < length) {
@@ -526,7 +538,7 @@ void drawString(unsigned char* string,
       if (!(blinkMode && blinkPhase < 2)) {
         drawChar(string[i], offset, color);
       }
-      
+
       offset += FONT_WIDTH + spacing;
     }
   }
@@ -548,12 +560,12 @@ void processString(unsigned char* string,
                    unsigned char& backColor)
 {
   displayLength = length;
-    
+
   for (int i = 0; i < length; i++) {
     if ((string[i] == FOREGROUND_COLOR) || (string[i] == BLINK)) {
       // Skip over foreground color and blink tags, but subtract their lengths
       displayLength--;
-      
+
       if (i + 1 < length) {      
         displayLength--;
         i++;
@@ -562,7 +574,7 @@ void processString(unsigned char* string,
     else if (string[i] == BACKGROUND_COLOR) {
       // Record background color, overwriting any previous ones
       displayLength--;
-      
+
       if (i + 1 < length) {
         displayLength--;      
         switch (string[i+1]) {
@@ -598,7 +610,7 @@ void drawPixel(unsigned char row, unsigned char offset, unsigned char color)
   if (color & COLOR_RED)
   {
     workBuffer[(row + DISPLAY_ROWS)*DISPLAY_COLS_B + alignedCol] |=
-              1 << alignedOffset;
+      1 << alignedOffset;
   }
 }
 
@@ -627,7 +639,7 @@ int scrollPosition;
 prog_uchar startMessage[] PROGMEM =
   "\x1d" "0"                      // background color = black
   "\x1c" "3" "Welcome to "        // text color = yellow, text "Welcome to"
-  "\x1c" "1" "Hack Pittsburg   "  // text color = green, text "Hack Pittsburgh"
+  "\x1c" "1" "Hack Pittsburgh  "  // text color = green, text "Hack Pittsburgh"
   "\x1c" "2" "Sign of "           // text color = red, text "Sign of"
   "\x1e" "1"                      // blink on
   "doom "                         // text "doom"
@@ -640,15 +652,19 @@ void setup()
 {
   // Set up LED display, use double buffering if possible
   setupVideoBuffer(DOUBLE_BUFFER);
-  
+
   // Open the serial port at 9600 baud
   Serial.begin(9600);
+
+  pinMode(EXTOUTPUT, OUTPUT);
+  digitalWrite(EXTOUTPUT, HIGH);
+  extCount = 0;
 
   // Copy in a welcome message
   for (int i = 0; i < sizeof(startMessage) - 1; i++) {
     userString[i] = pgm_read_byte_near(startMessage + i);
   }
-  
+
   userStringLen = sizeof(startMessage) - 1;  // Ignore the null zero
   scrollPosition = DISPLAY_COLS_B*8;         // Start at the end of the screen
 
@@ -676,15 +692,15 @@ void loop()
         // Record the length information
         userStringLen = userStringInputLen;
         userStringInputLen = 0;
-      
+
         // then copy over the message
         memcpy ( userString, userStringInput, userStringLen );
-        
+
         // Determine the display length (total length minus inline control characters)
         // and background color of the string
         processString( userString, userStringLen,
                        userStringDisplayLen, backColor );
-        
+
         // Finally, set the text to scroll in from the end
         scrollPosition = DISPLAY_COLS_B*8;
       }
@@ -695,6 +711,10 @@ void loop()
         userStringInputLen--;
       }
     }
+    else if (new_data == EXT_ON) {
+      digitalWrite(EXTOUTPUT, LOW);
+      extCount = 8000;
+    }
     else if (userStringInputLen < USER_STRING_MAX_LENGTH)
     {
       // Add the new character to the message and increment
@@ -702,16 +722,18 @@ void loop()
       userStringInputLen++;
     }
   }
-  
+
   // Draw the next frame and wait a bit
   clearVideoBuffer(backColor);
   drawString(userString, userStringLen, scrollPosition);
   flipVideoBuffer();
   delay(40);
-  
+
   // Then update the scroll position
   scrollPosition--;
   if (scrollPosition < -userStringDisplayLen*6) {
     scrollPosition = DISPLAY_COLS_B*8;
   }
 }
+
+
